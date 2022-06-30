@@ -1,0 +1,14 @@
+select row_number() over(order by maker) as num
+  ,CASE WHEN num_0=1 THEN maker
+    ELSE ''
+  END as maker
+  ,type
+  from
+(select row_number() over(partition by maker ORDER BY maker,filter_1) as num_0,maker, type
+from 
+(select distinct maker, type ,case 
+when lower(type)='pc' then 1
+when lower(type)='laptop' then 2 
+else 3 end as filter_1
+from product)
+table_f) table_1
