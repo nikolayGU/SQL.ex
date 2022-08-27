@@ -1,0 +1,103 @@
+with 
+    first_payments as (
+                    select user_id
+                        ,date_trunc('day', min(transaction_datetime)) as min_trans
+                    from SKYENG_DB.payments
+                    where status_name = 'success'
+                    group by user_id
+                ),
+    all_dates as (
+                    select distinct  class_start_datetime :: date
+                    from SKYENG_DB.classes
+                    where date_part('year', class_start_datetime) = '2016'
+                ),
+    payments_by_dates as (
+                    select user_id
+                        , ( transaction_datetime ::date )as date_datetime
+                        , sum(classes ) as transaction_balance_change
+                    from SKYENG_DB.payments
+                    where status_name = 'success'
+                    group by user_id
+                            , ( transaction_datetime ::date )
+                    order by transaction_balance_change desc
+                            , date_datetime asc
+                ),
+    all_dates_by_user as (
+                    select user_id
+                        , class_start_datetime 
+                    from all_dates
+                    join first_payments 
+                        on all_dates.class_start_datetime >= first_payments.min_trans
+                ),
+    classes_by_dates as (
+                    select user_id
+                        , date_trunc('day', class_start_datetime) as class_date
+                        , count(id_class)*-1 as classes
+                    from skyeng_db.classes
+                    where class_status in ('failed_by_student','success')
+                        and class_type not in ('trial')
+                    group by user_id
+                        , class_date
+                    order by user_id
+                        ,class_date
+                ),
+    sum_tran as (
+                    select all_dates_by_user.user_id as user_id
+                        , class_start_datetime
+                        , case 
+                            when transaction_balance_change is null 
+                            then 0 
+                            else transaction_balance_change 
+                          end as transaction_balance
+                        ,sum(transaction_balance_change) over (partition by all_dates_by_user.user_id order by class_start_datetime) as cum_total_tr
+                    from all_dates_by_user
+                    left join payments_by_dates
+                        on all_dates_by_user.user_id = payments_by_dates.user_id
+                        and class_start_datetime = date_datetime
+                ),
+    sum_class as (
+                    select all_dates_by_user.user_id
+                        , class_start_datetime
+                        , case 
+                                when classes is null 
+                                then 0 
+                                else classes 
+                              end as classes
+                            , sum(case
+                                    when classes is null 
+                                    then 0 
+                                    else classes 
+                                end
+                                ) over (partition by all_dates_by_user.user_id order by class_start_datetime) as cum_total_cl
+                    from all_dates_by_user
+                    left join classes_by_dates
+                        on all_dates_by_user.user_id = classes_by_dates.user_id
+                            and all_dates_by_user.class_start_datetime = classes_by_dates.class_date
+                    order by all_dates_by_user.user_id, class_start_datetime
+                ),
+    balances as (
+                    select sum_tran.user_id
+                        , sum_tran.class_start_datetime
+                        , transaction_balance
+                        , classes
+                        , cum_total_tr
+                        , cum_total_cl
+                        , (cum_total_tr + cum_total_cl) as balance
+                    from sum_tran
+                    join sum_class
+                        on sum_tran.user_id = sum_class.user_id
+                        and sum_tran.class_start_datetime = sum_class.class_start_datetime
+                    order by sum_tran.user_id
+                        , sum_tran.class_start_datetime  
+                )
+
+
+select  class_start_datetime
+        , sum(transaction_balance) as transaction_balance
+        , sum(classes) as classes
+        , sum(cum_total_tr) as cum_total_tr
+        , sum(cum_total_cl) as cum_total_cl
+        , sum(balance) as balance
+from balances
+group by class_start_datetime
+order by class_start_datetime
